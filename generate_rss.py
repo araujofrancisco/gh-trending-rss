@@ -1,3 +1,12 @@
+"""Generate RSS/Atom feeds from GitHub Trending repositories.
+
+Scrapes https://github.com/trending, extracts repository metadata
+(name, description, language, stars, forks, daily stars), and outputs
+a standards-compliant RSS 2.0 or Atom 1.0 feed to stdout or a file.
+
+Dependencies: requests, beautifulsoup4, feedgen, lxml
+"""
+
 import argparse
 import re
 import sys
@@ -19,6 +28,19 @@ FORMAT_CHOICES = ["rss", "atom"]
 
 
 def parse_int(text: str) -> int:
+    """Parse a GitHub-formatted number string into an integer.
+
+    Handles comma separators (``1,234``), ``k``/``K`` suffixes
+    (``1.5k`` → 1500), and ``m``/``M`` suffixes (``2.5m`` → 2500000).
+    Also handles raw text like ``"123 stars today"`` after the caller
+    strips the label.
+
+    Args:
+        text: Raw string from the page, possibly empty or ``None``.
+
+    Returns:
+        Integer value, or ``0`` if the input cannot be parsed.
+    """
     if not text:
         return 0
     text = text.strip().lower().replace(",", "")
@@ -35,19 +57,46 @@ def parse_int(text: str) -> int:
 
 
 class TrendingScraper:
+    """Fetch and parse GitHub Trending HTML into structured repository data.
+
+    Uses ``requests`` with automatic retry on transient server errors and
+    ``BeautifulSoup`` with the ``lxml`` parser for fast HTML extraction.
+
+    Attributes:
+        language: Programming language filter (e.g. ``"python"``) or ``None``.
+        since: Trending window — ``"daily"``, ``"weekly"``, or ``"monthly"``.
+    """
+
     def __init__(self, language=None, since="daily"):
+        """Args:
+            language: Filter results to a specific language (e.g. ``"rust"``).
+            since: Time window for trending data.
+        """
         self.language = language
         self.since = since
         self._session = self._build_session()
 
     @property
     def trending_url(self) -> str:
+        """Build the GitHub Trending URL for the configured language and window.
+
+        Returns:
+            Full URL string, e.g. ``https://github.com/trending/python``.
+        """
         url = TRENDING_URL
         if self.language:
             url = f"{url}/{self.language}"
         return url
 
     def _build_session(self) -> requests.Session:
+        """Create a pre-configured ``requests.Session`` with retry logic.
+
+        Retries up to 3 times with exponential backoff on HTTP 502, 503,
+        and 504 responses.
+
+        Returns:
+            Configured ``requests.Session`` instance.
+        """
         session = requests.Session()
         session.headers.update({"User-Agent": USER_AGENT})
         retries = Retry(
@@ -61,12 +110,34 @@ class TrendingScraper:
         return session
 
     def fetch_html(self) -> str:
+        """Fetch the GitHub Trending page HTML.
+
+        Sends a ``GET`` request with the configured ``since`` parameter.
+
+        Returns:
+            Raw HTML content of the trending page.
+
+        Raises:
+            requests.RequestException: If the request fails after all retries.
+        """
         params = {"since": self.since}
         r = self._session.get(self.trending_url, params=params, timeout=30)
         r.raise_for_status()
         return r.text
 
     def extract_repos(self, html: str) -> list[dict]:
+        """Parse repository entries from the GitHub Trending HTML.
+
+        Uses a cascade of CSS selectors to handle minor markup changes
+        (``article.Box-row`` → ``div.Box-row`` → ``[class*='Box-row']``).
+
+        Args:
+            html: Raw HTML of the GitHub Trending page.
+
+        Returns:
+            List of dicts with keys ``full_name``, ``url``, ``description``,
+            ``language``, ``stars_total``, ``forks``, ``stars_today``.
+        """
         soup = BeautifulSoup(html, "lxml")
         repos = []
 
@@ -125,6 +196,17 @@ class TrendingScraper:
 
 
 def build_feed(repos: list[dict], feed_format="rss", feed_url=None) -> str:
+    """Generate an RSS 2.0 or Atom 1.0 feed from parsed repository data.
+
+    Args:
+        repos: List of repo dicts from :meth:`TrendingScraper.extract_repos`.
+        feed_format: ``"rss"`` or ``"atom"``.
+        feed_url: Canonical URL for the feed's ``rel="self"`` link.
+            Defaults to the generic trending URL.
+
+    Returns:
+        XML feed as a UTF-8 encoded string.
+    """
     fg = FeedGenerator()
     fg.id(feed_url or TRENDING_URL)
     fg.title("GitHub Trending")
@@ -154,6 +236,7 @@ def build_feed(repos: list[dict], feed_format="rss", feed_url=None) -> str:
 
 
 def main():
+    """Entry point: parse CLI args, fetch, extract, build feed, and output."""
     parser = argparse.ArgumentParser(
         description="Generate an RSS/Atom feed from GitHub trending repositories."
     )
