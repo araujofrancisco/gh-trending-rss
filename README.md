@@ -14,7 +14,7 @@ docker build -t gh-trending-rss .
 docker run --rm gh-trending-rss > trending.xml
 ```
 
-Pipe it into a file, a feed reader, or Newsboat directly.
+The container runs as a non-root `appuser` for security. Pipe output into a file, a feed reader, or Newsboat directly.
 
 ## CLI reference
 
@@ -58,6 +58,12 @@ exec:docker run --rm gh-trending-rss --language rust --since weekly
 ```
 
 Newsboat calls the container on each refresh and parses the RSS from stdout.
+
+> **Note:** When the docker command includes arguments/flags, the entire string after `exec:` must be enclosed in double quotes:
+>
+> ```
+> exec:"docker run --rm gh-trending-rss --language python --format atom"
+> ```
 
 ## Local development
 
@@ -183,7 +189,7 @@ GitHub Trending HTML
 ├── generate_rss.py          # CLI entry point, scraper, feed builder
 ├── requirements.txt         # Python dependencies (pinned ranges)
 ├── pyproject.toml           # Project metadata, pytest config
-├── Dockerfile               # Multi-layer Docker image
+├── Dockerfile               # Multi-stage Docker image, runs as non-root appuser
 ├── .dockerignore            # Excludes tests, .git from image
 ├── .github/workflows/ci.yml # CI: pytest on 3.10–3.12
 ├── tests/
@@ -193,6 +199,35 @@ GitHub Trending HTML
 │   └── test_build_feed.py   # RSS/Atom output structure tests
 └── README.md
 ```
+
+## Dockerfile
+
+```dockerfile
+FROM python:3.12-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+  && rm -rf /root/.cache
+
+COPY generate_rss.py .
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+ENTRYPOINT ["python", "/app/generate_rss.py"]
+```
+
+- Packages are installed as `root` (required for system-wide pip installs), but the runtime process runs as `appuser`.
+- Pip's root warning during build is expected and harmless.
+- The `--output` flag writes inside the container and is lost on exit — use stdout redirection (`> file.xml`) on the host instead.
 
 ## Testing
 
@@ -210,3 +245,4 @@ CI runs tests against Python 3.10, 3.11, and 3.12 on every push/PR.
 | `no repositories found` | GitHub changed their HTML markup. Check [GitHub Trending](https://github.com/trending) and update CSS selectors in `extract_repos()`. |
 | `403 Forbidden` | Rate-limited. The retry logic handles 502/503/504 but not 403. Add a longer delay or rotate User-Agent. |
 | Newsboat shows no items | Ensure the `exec:` command works standalone. The container must output valid RSS to stdout. |
+| `Permission denied` when using `--output` | The container runs as `appuser`. Ensure the output path is writable, or use stdout redirection instead. |
