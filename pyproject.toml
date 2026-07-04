@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "gh-trending-rss"
+version = "1.0.0"
+description = "Generate RSS/Atom feeds from GitHub trending repositories"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31.0,<3",
+    "beautifulsoup4>=4.12,<5",
+    "feedgen>=1.0,<2",
+    "lxml>=5.0,<6",
+]
+
+[project.scripts]
+gh-trending-rss = "generate_rss:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]
